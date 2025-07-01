@@ -31,18 +31,21 @@ class TradeInfoWidget(QFrame):
         self.profit_label = QLabel("Прибыль: 0.00")
         self.trades_label = QLabel("Сделок: 0")
         self.win_rate_label = QLabel("Винрейт: 0%")
+        self.win_sum_label = QLabel("Сумма выигрышей: 0.00")
         self.last_trade_label = QLabel("Последняя сделка: -")
         
         layout.addWidget(self.profit_label)
         layout.addWidget(self.trades_label)
         layout.addWidget(self.win_rate_label)
+        layout.addWidget(self.win_sum_label)
         layout.addWidget(self.last_trade_label)
         
         self.setMaximumWidth(200)
         self.setVisible(False)
     
     def update_stats(self, total_profit: float, trades_count: int, 
-                     winning_trades: int, last_trade_profit: float = None):
+                     winning_trades: int, last_trade_profit: float = None,
+                     win_sum: float = 0.0):
         """Обновляет статистику торговли."""
         self.profit_label.setText(f"Прибыль: {total_profit:.2f}")
         self.profit_label.setStyleSheet(f"color: {'#26a69a' if total_profit >= 0 else '#ef5350'};")
@@ -51,6 +54,9 @@ class TradeInfoWidget(QFrame):
         
         win_rate = (winning_trades / trades_count * 100) if trades_count > 0 else 0
         self.win_rate_label.setText(f"Винрейт: {win_rate:.1f}%")
+        
+        self.win_sum_label.setText(f"Сумма выигрышей: {win_sum:.2f}")
+        self.win_sum_label.setStyleSheet("color: #26a69a;")
         
         if last_trade_profit is not None:
             self.last_trade_label.setText(f"Последняя сделка: {last_trade_profit:.2f}")
@@ -85,6 +91,7 @@ class ModernChart(QWidget):
         self._total_profit = 0.0
         self._trades_count = 0
         self._winning_trades = 0
+        self._win_sum = 0.0  # Сумма выигрышей
         self._last_trade_profit = None
 
         # --- Настройка UI ---
@@ -242,13 +249,15 @@ class ModernChart(QWidget):
             self._last_trade_profit = signal.get('profit', 0.0)
             if self._last_trade_profit > 0:
                 self._winning_trades += 1
+                self._win_sum += self._last_trade_profit  # Добавляем прибыль к сумме выигрышей
             
             # Обновляем информацию о сделках
             self.trade_info.update_stats(
                 self._total_profit, 
                 self._trades_count,
                 self._winning_trades,
-                self._last_trade_profit
+                self._last_trade_profit,
+                self._win_sum
             )
             self.redraw()
         
@@ -259,6 +268,7 @@ class ModernChart(QWidget):
             self._total_profit = 0.0
             self._trades_count = 0
             self._winning_trades = 0
+            self._win_sum = 0.0
             self._last_trade_profit = None
             self.trade_info.setVisible(False)
             self.redraw()
@@ -274,7 +284,8 @@ class ModernChart(QWidget):
                 self.trade_info.update_stats(
                     self._total_profit, 
                     self._trades_count,
-                    self._winning_trades
+                    self._winning_trades,
+                    win_sum=self._win_sum
                 )
 
     def set_volume_visibility(self, visible: bool):

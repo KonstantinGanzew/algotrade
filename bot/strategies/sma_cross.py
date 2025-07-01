@@ -33,6 +33,7 @@ class SmaCrossStrategy(Strategy):
         self.total_profit: float = 0.0
         self.trades_count: int = 0
         self.winning_trades: int = 0
+        self.win_sum: float = 0.0  # Сумма выигрышей
 
     # ------------------------------------------------------------------
     async def on_start(self) -> None:
@@ -42,6 +43,7 @@ class SmaCrossStrategy(Strategy):
         self.total_profit = 0.0
         self.trades_count = 0
         self.winning_trades = 0
+        self.win_sum = 0.0
         
         # Очищаем историю, чтобы не было ложных сигналов от старых данных
         self.df = pd.DataFrame(columns=["time", "close"])
@@ -64,7 +66,8 @@ class SmaCrossStrategy(Strategy):
                 "total_profit": self.total_profit,
                 "trades_count": self.trades_count,
                 "winning_trades": self.winning_trades,
-                "win_rate": (self.winning_trades / self.trades_count * 100) if self.trades_count > 0 else 0
+                "win_rate": (self.winning_trades / self.trades_count * 100) if self.trades_count > 0 else 0,
+                "win_sum": self.win_sum
             })
 
     async def on_candle(self, candle):
@@ -117,6 +120,7 @@ class SmaCrossStrategy(Strategy):
             self.trades_count += 1
             if profit > 0:
                 self.winning_trades += 1
+                self.win_sum += profit
                 
             self.position_open = False
             
@@ -129,5 +133,6 @@ class SmaCrossStrategy(Strategy):
                     "direction": "sell",
                     "qty": self.qty,
                     "profit": profit,
-                    "total_profit": self.total_profit
+                    "total_profit": self.total_profit,
+                    "win_sum": self.win_sum
                 }) 
