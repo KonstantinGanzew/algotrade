@@ -1,0 +1,7 @@
+{
+  "sma_cross": {
+    "fast": 20,
+    "slow": 50,
+    "qty": 1
+  }
+}

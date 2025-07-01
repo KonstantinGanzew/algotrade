@@ -1,0 +1,10 @@
+tinkoff-investments==0.2.0b114  # official async client wrapper
+PyYAML>=6.0
+aiorun>=2023.7.2
+pandas>=2.0
+numpy>=1.23
+pytest>=8.0
+pytest-asyncio>=0.23
+PyQt6>=6.5
+pyqtgraph>=0.13.7
+qasync>=0.27 
