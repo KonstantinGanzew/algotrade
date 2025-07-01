@@ -1,151 +1,210 @@
-from PyQt6.QtWidgets import (
-    QCheckBox, QHBoxLayout, QWidget, QComboBox, QLabel, 
-    QPushButton, QFrame, QVBoxLayout
-)
-from PyQt6.QtCore import pyqtSignal, Qt
-from tinkoff.invest import CandleInterval
+from __future__ import annotations
 
+import logging
+from typing import Dict, Any
+
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import (
+    QWidget, QHBoxLayout, QVBoxLayout, QComboBox, QLabel, 
+    QPushButton, QCheckBox, QFrame, QGroupBox
+)
+from tinkoff.invest.schemas import CandleInterval
+
+from bot.config import Settings, POPULAR_INSTRUMENTS
 from bot.gui.chart import ModernChart
+
+logger = logging.getLogger(__name__)
 
 
 class ControlPanel(QWidget):
-    """Панель управления графиком (чекбоксы, индикаторы, таймфрейм) и стратегией."""
+    """Панель управления для графика и стратегий."""
 
-    timeframe_changed = pyqtSignal(CandleInterval)
-    strategy_start = pyqtSignal()
-    strategy_stop = pyqtSignal()
+    # Сигналы
+    timeframe_changed = pyqtSignal(object)  # CandleInterval
+    instrument_changed = pyqtSignal(str)  # FIGI
 
     def __init__(self, chart: ModernChart):
         super().__init__()
         self.chart = chart
-        self.strategy_running = False
-
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(5)
-
-        # Основная панель с чекбоксами и таймфреймом
+        
+        # Словарь таймфреймов
+        self.timeframes = {
+            "1 мин": CandleInterval.CANDLE_INTERVAL_1_MIN,
+            "5 мин": CandleInterval.CANDLE_INTERVAL_5_MIN,
+            "15 мин": CandleInterval.CANDLE_INTERVAL_15_MIN,
+            "1 час": CandleInterval.CANDLE_INTERVAL_HOUR,
+            "1 день": CandleInterval.CANDLE_INTERVAL_DAY,
+        }
+        
+        # Словарь стратегий
+        self.strategies = {
+            "EchoStrategy": "Эхо (тест)",
+            "SmaCrossStrategy": "SMA-Cross",
+        }
+        
+        # Список инструментов
+        self.instruments = Settings().get_favorite_instruments()
+        
+        self._init_ui()
+    
+    def _init_ui(self):
+        """Инициализирует пользовательский интерфейс."""
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(10, 5, 10, 5)
+        
+        # --- Группа выбора инструмента ---
+        instrument_group = QGroupBox("Инструмент")
+        instrument_layout = QVBoxLayout(instrument_group)
+        
+        # Комбобокс для выбора инструмента
+        self.instrument_combo = QComboBox()
+        for instrument in self.instruments:
+            self.instrument_combo.addItem(
+                f"{instrument['name']} ({instrument['ticker']})", 
+                instrument['figi']
+            )
+        self.instrument_combo.currentIndexChanged.connect(self._on_instrument_change)
+        
+        instrument_layout.addWidget(self.instrument_combo)
+        main_layout.addWidget(instrument_group)
+        
+        # --- Группа настроек графика ---
+        chart_group = QGroupBox("График")
+        chart_layout = QVBoxLayout(chart_group)
+        
+        # Контролы графика в горизонтальном лейауте
         chart_controls = QHBoxLayout()
-        chart_controls.setContentsMargins(0, 0, 0, 0)
-
-        # --- Чекбоксы -----------------------------------------------------
-        self.grid_chk = QCheckBox("Grid", self)
-        self.grid_chk.setChecked(True)
-        self.grid_chk.stateChanged.connect(self._toggle_grid)
-        chart_controls.addWidget(self.grid_chk)
-
-        self.volume_chk = QCheckBox("Volume", self)
-        self.volume_chk.setChecked(True)
+        
+        # Выбор таймфрейма
+        tf_label = QLabel("Таймфрейм:")
+        chart_controls.addWidget(tf_label)
+        
+        self.timeframe_combo = QComboBox()
+        for tf_name in self.timeframes:
+            self.timeframe_combo.addItem(tf_name)
+        self.timeframe_combo.currentTextChanged.connect(self._on_timeframe_change)
+        chart_controls.addWidget(self.timeframe_combo)
+        
+        chart_controls.addSpacing(20)  # Разделитель
+        
+        # Чекбоксы для отображения элементов графика
+        self.volume_chk = QCheckBox("Объем", self)
+        self.volume_chk.setChecked(True)  # Включено по-умолчанию
         self.volume_chk.stateChanged.connect(self._toggle_volume)
         chart_controls.addWidget(self.volume_chk)
-
+        
+        self.grid_chk = QCheckBox("Сетка", self)
+        self.grid_chk.setChecked(True)  # Включено по-умолчанию
+        self.grid_chk.stateChanged.connect(self._toggle_grid)
+        chart_controls.addWidget(self.grid_chk)
+        
         self.ma_chk = QCheckBox("SMA(20)", self)
         self.ma_chk.setChecked(False)  # Отключено по-умолчанию
         self.ma_chk.stateChanged.connect(self._toggle_sma)
         chart_controls.addWidget(self.ma_chk)
-
+        
         self.signals_chk = QCheckBox("Сигналы", self)
         self.signals_chk.setChecked(True)  # Включено по-умолчанию
         self.signals_chk.stateChanged.connect(self._toggle_signals)
         chart_controls.addWidget(self.signals_chk)
 
         chart_controls.addStretch(1)  # Заполнитель
-
-        # --- Выбор таймфрейма ---
-        chart_controls.addWidget(QLabel("Таймфрейм:"))
-        self.timeframe_combo = QComboBox(self)
-        self.timeframes = {
-            "1 минута": CandleInterval.CANDLE_INTERVAL_1_MIN,
-            "5 минут": CandleInterval.CANDLE_INTERVAL_5_MIN,
-            "15 минут": CandleInterval.CANDLE_INTERVAL_15_MIN,
-            "1 час": CandleInterval.CANDLE_INTERVAL_HOUR,
-            "1 день": CandleInterval.CANDLE_INTERVAL_DAY,
-        }
-        self.timeframe_combo.addItems(self.timeframes.keys())
-        self.timeframe_combo.currentTextChanged.connect(self._on_timeframe_change)
-        chart_controls.addWidget(self.timeframe_combo)
-
-        main_layout.addLayout(chart_controls)
-
-        # Разделительная линия
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setFrameShadow(QFrame.Shadow.Sunken)
-        main_layout.addWidget(separator)
-
-        # Панель управления стратегией
-        strategy_controls = QHBoxLayout()
-        strategy_controls.setContentsMargins(0, 0, 0, 0)
-
-        self.strategy_label = QLabel("Стратегия:")
-        strategy_controls.addWidget(self.strategy_label)
-
-        self.strategy_name_label = QLabel("не выбрана")
-        self.strategy_name_label.setStyleSheet("font-weight: bold;")
-        strategy_controls.addWidget(self.strategy_name_label)
-
-        strategy_controls.addStretch(1)
-
-        self.status_label = QLabel("Статус: остановлена")
-        strategy_controls.addWidget(self.status_label)
-
+        
+        chart_layout.addLayout(chart_controls)
+        main_layout.addWidget(chart_group)
+        
+        # --- Группа управления стратегией ---
+        strategy_group = QGroupBox("Стратегия")
+        strategy_layout = QVBoxLayout(strategy_group)
+        
+        # Верхний ряд: выбор стратегии и статус
+        strategy_top = QHBoxLayout()
+        
+        # Выбор стратегии
+        self.strategy_combo = QComboBox()
+        for strategy_id, strategy_name in self.strategies.items():
+            self.strategy_combo.addItem(strategy_name, strategy_id)
+        strategy_top.addWidget(self.strategy_combo)
+        
+        # Индикатор статуса
+        self.status_label = QLabel("Остановлена")
+        self.status_label.setStyleSheet("color: #ef5350; font-weight: bold;")
+        strategy_top.addWidget(self.status_label)
+        
+        strategy_top.addStretch(1)  # Заполнитель
+        
+        # Нижний ряд: кнопки управления
+        strategy_bottom = QHBoxLayout()
+        
+        # Кнопка запуска
         self.start_button = QPushButton("Старт")
-        self.start_button.setFixedWidth(80)
-        self.start_button.clicked.connect(self._on_start_clicked)
-        strategy_controls.addWidget(self.start_button)
-
+        self.start_button.setStyleSheet("background-color: #26a69a; color: white;")
+        strategy_bottom.addWidget(self.start_button)
+        
+        # Кнопка остановки
         self.stop_button = QPushButton("Стоп")
-        self.stop_button.setFixedWidth(80)
-        self.stop_button.setEnabled(False)
-        self.stop_button.clicked.connect(self._on_stop_clicked)
-        strategy_controls.addWidget(self.stop_button)
-
-        main_layout.addLayout(strategy_controls)
-
-    def _toggle_grid(self, state: int):
-        self.chart.set_grid_visibility(bool(state))
-
+        self.stop_button.setStyleSheet("background-color: #ef5350; color: white;")
+        self.stop_button.setEnabled(False)  # Изначально отключена
+        strategy_bottom.addWidget(self.stop_button)
+        
+        # Добавляем ряды в лейаут группы
+        strategy_layout.addLayout(strategy_top)
+        strategy_layout.addLayout(strategy_bottom)
+        
+        main_layout.addWidget(strategy_group)
+        
+        # Устанавливаем соотношение ширины групп
+        main_layout.setStretch(0, 1)  # Инструмент
+        main_layout.setStretch(1, 2)  # График
+        main_layout.setStretch(2, 1)  # Стратегия
+    
+    def set_strategy_running(self, running: bool):
+        """Обновляет состояние UI в зависимости от статуса стратегии."""
+        if running:
+            self.status_label.setText("Запущена")
+            self.status_label.setStyleSheet("color: #26a69a; font-weight: bold;")
+            self.start_button.setEnabled(False)
+            self.stop_button.setEnabled(True)
+            self.strategy_combo.setEnabled(False)
+        else:
+            self.status_label.setText("Остановлена")
+            self.status_label.setStyleSheet("color: #ef5350; font-weight: bold;")
+            self.start_button.setEnabled(True)
+            self.stop_button.setEnabled(False)
+            self.strategy_combo.setEnabled(True)
+    
+    def set_strategy_name(self, strategy_class_name: str):
+        """Устанавливает текущую стратегию в комбобоксе."""
+        for i in range(self.strategy_combo.count()):
+            if self.strategy_combo.itemData(i) == strategy_class_name:
+                self.strategy_combo.setCurrentIndex(i)
+                break
+    
+    def get_current_strategy(self) -> str:
+        """Возвращает идентификатор текущей выбранной стратегии."""
+        return self.strategy_combo.currentData()
+    
+    def get_current_instrument(self) -> str:
+        """Возвращает FIGI текущего выбранного инструмента."""
+        return self.instrument_combo.currentData()
+    
     def _toggle_volume(self, state: int):
         self.chart.set_volume_visibility(bool(state))
-
+    
+    def _toggle_grid(self, state: int):
+        self.chart.set_grid_visibility(bool(state))
+    
     def _toggle_sma(self, state: int):
         self.chart.set_sma_visibility(bool(state))
-
+        
     def _toggle_signals(self, state: int):
         self.chart.set_signals_visibility(bool(state))
 
     def _on_timeframe_change(self, text: str):
         interval = self.timeframes[text]
         self.timeframe_changed.emit(interval)
-    
-    def _on_start_clicked(self):
-        """Обработчик нажатия на кнопку Старт."""
-        self.strategy_running = True
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.status_label.setText("Статус: запущена")
-        self.status_label.setStyleSheet("color: green; font-weight: bold;")
-        self.strategy_start.emit()
-    
-    def _on_stop_clicked(self):
-        """Обработчик нажатия на кнопку Стоп."""
-        self.strategy_running = False
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.status_label.setText("Статус: остановлена")
-        self.status_label.setStyleSheet("color: red;")
-        self.strategy_stop.emit()
-    
-    def set_strategy_name(self, name: str):
-        """Устанавливает имя текущей стратегии."""
-        self.strategy_name_label.setText(name)
-    
-    def strategy_error(self, error_text: str):
-        """Отображает ошибку стратегии и сбрасывает состояние."""
-        self.strategy_running = False
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.status_label.setText("Статус: ошибка")
-        self.status_label.setStyleSheet("color: red; font-weight: bold;")
         
-        # Сброс статуса можно реализовать через диалоговое окно с сообщением об ошибке 
+    def _on_instrument_change(self, index: int):
+        if index >= 0:
+            figi = self.instrument_combo.itemData(index)
+            self.instrument_changed.emit(figi) 

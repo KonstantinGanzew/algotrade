@@ -75,16 +75,14 @@ class ModernChart(QWidget):
         self.figi = figi
         self.max_bars = max_bars
         self.sma_period = sma_period
-        self._df = pd.DataFrame(
-            columns=["time", "open", "close", "high", "low", "volume"]
-        ).set_index("time")
-
-        # --- Состояние видимости ---
+        self.df = pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+        
+        # Настройки отображения
         self._volume_visible = True
-        self._sma_visible = False
         self._grid_visible = True
+        self._sma_visible = False
         self._signals_visible = True
-
+        
         # --- Данные для отображения сигналов ---
         self._trade_entries: List[Dict[str, Any]] = []
         self._trade_exits: List[Dict[str, Any]] = []
@@ -93,7 +91,10 @@ class ModernChart(QWidget):
         self._winning_trades = 0
         self._win_sum = 0.0  # Сумма выигрышей
         self._last_trade_profit = None
-
+        
+        self._init_ui()
+        
+    def _init_ui(self):
         # --- Настройка UI ---
         pg.setConfigOptions(antialias=True, background="#121212", foreground="#ccc")
         layout = QGridLayout(self)
@@ -115,6 +116,7 @@ class ModernChart(QWidget):
         # 2. График объёма
         self.win.nextRow()
         self._volume_plot = self.win.addPlot(row=1, col=0)
+        self.win.nextRow()
         self._volume_plot.setMaximumHeight(150)
         self._volume_plot.getAxis("left").setWidth(60)
         self._volume_plot.setXLink(self._price_plot)  # Синхронизация по оси X
@@ -144,10 +146,10 @@ class ModernChart(QWidget):
             self._price_plot.removeItem(item)
         self._candle_items_list = []
         
-        if self._df.empty:
+        if self.df.empty:
             return
 
-        df = self._df
+        df = self.df
         x_coords = list(range(len(df)))
 
         # Свечи
@@ -231,7 +233,7 @@ class ModernChart(QWidget):
             },
             name=candle.time,
         )
-        self._df = pd.concat([self._df, new_row.to_frame().T]).iloc[-self.max_bars :]
+        self.df = pd.concat([self.df, new_row.to_frame().T]).iloc[-self.max_bars :]
         self.redraw()
 
     def process_strategy_signal(self, signal: Dict[str, Any]) -> None:
@@ -306,5 +308,21 @@ class ModernChart(QWidget):
 
     def clear_data(self):
         """Clears the DataFrame and redraws the empty chart."""
-        self._df = self._df.iloc[0:0]
-        self.redraw() 
+        self.df = self.df.iloc[0:0]
+        self.redraw()
+
+    def set_figi(self, figi: str):
+        """Устанавливает новый FIGI для графика."""
+        self.figi = figi
+        self.clear_data()
+        self._trade_entries = []
+        self._trade_exits = []
+        self._total_profit = 0.0
+        self._trades_count = 0
+        self._winning_trades = 0
+        self._win_sum = 0.0
+        self._last_trade_profit = None
+        
+        # Обновляем информацию в виджете статистики
+        if hasattr(self, "_trade_info_widget"):
+            self._trade_info_widget.update_stats(0.0, 0, 0, 0.0) 

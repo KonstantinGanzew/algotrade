@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QTabWidget, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QTabWidget, QMessageBox, QHBoxLayout, QLabel
 from qasync import QEventLoop
 from PyQt6.QtCore import QTimer
 import logging
@@ -11,7 +11,7 @@ from tinkoff.invest import CandleInterval
 from bot.core.client import InvestClient
 from bot.gui.chart import ModernChart
 from bot.gui.controls import ControlPanel
-from bot.gui.settings import SettingsPanel
+from bot.gui.settings import SettingsPanel, Settings
 from bot.strategies.base import Strategy
 
 logger = logging.getLogger(__name__)
@@ -22,88 +22,188 @@ class ModernWindow(QMainWindow):
 
     def __init__(self, figi: str):
         super().__init__()
-        logger.debug("Initializing ModernWindow for FIGI: %s", figi)
-        self.setWindowTitle(f"AlgoTrade | {figi}")
-        self.resize(1000, 700)
         self.figi = figi
-        
-        # Для работы со стратегией
-        self._strategy_task: asyncio.Task | None = None
-        self._strategy_instance: Strategy | None = None
-        self._strategy_class_name = "SmaCrossStrategy"
+        self._instrument_info = None  # Информация об инструменте
+        self._stream_task = None
+        self._stream_mgr = None
+        self._strategy_instance = None
+        self._strategy_running = False
+        self._strategy_class_name = "EchoStrategy"  # По умолчанию
         self._strategy_params = {}
+        
+        self._init_ui()
+        self._init_async_loop()
+        
+        # Загружаем информацию об инструменте
+        asyncio.create_task(self._load_instrument_info())
+        
+    async def _load_instrument_info(self):
+        """Загружает информацию об инструменте."""
+        try:
+            client = InvestClient()
+            self._instrument_info = await client.get_instrument_info(self.figi)
+            
+            # Обновляем заголовок окна
+            currency_symbol = Settings().get_currency_symbol(self._instrument_info.get("currency", ""))
+            ticker = self._instrument_info.get("ticker", "")
+            name = self._instrument_info.get("name", "")
+            self.setWindowTitle(f"{name} ({ticker}) - {currency_symbol}")
+            
+            # Обновляем информацию в GUI
+            if hasattr(self, "ticker_label"):
+                self.ticker_label.setText(f"{name} ({ticker})")
+            if hasattr(self, "currency_label"):
+                self.currency_label.setText(f"Валюта: {currency_symbol}")
+            
+        except Exception as e:
+            logger.error("Failed to load instrument info: %s", e)
 
+    def _init_ui(self):
+        """Инициализирует пользовательский интерфейс."""
+        logger.debug("Initializing ModernWindow for FIGI: %s", self.figi)
+        self.setWindowTitle(f"AlgoTrade - {self.figi}")
+        self.resize(1200, 800)
+        
+        # Основной виджет и компоновка
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
         
-        # Создаем виджет с вкладками
-        self.tab_widget = QTabWidget()
+        # Верхняя панель с информацией об инструменте
+        top_panel = QHBoxLayout()
+        self.ticker_label = QLabel(f"Инструмент: {self.figi}")
+        self.ticker_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.currency_label = QLabel("Валюта: ")
+        top_panel.addWidget(self.ticker_label)
+        top_panel.addWidget(self.currency_label)
+        top_panel.addStretch(1)
+        main_layout.addLayout(top_panel)
         
-        # Вкладка с графиком
-        chart_tab = QWidget()
-        chart_layout = QVBoxLayout(chart_tab)
-        
+        # Создаем виджет графика
         logger.debug("Creating ModernChart widget...")
-        self.chart = ModernChart(figi)
-        logger.debug("Creating ControlPanel widget...")
-        self.controls = ControlPanel(self.chart)
-        self.controls.timeframe_changed.connect(self.change_stream)
-        self.controls.strategy_start.connect(self._on_strategy_start)
-        self.controls.strategy_stop.connect(self._on_strategy_stop)
-
-        chart_layout.addWidget(self.chart)
-        chart_layout.addWidget(self.controls)
+        self.chart = ModernChart(figi=self.figi)
         
-        # Вкладка с настройками
+        # Создаем панель управления
+        logger.debug("Creating ControlPanel widget...")
+        self.controls = ControlPanel(chart=self.chart)
+        
+        # Создаем панель настроек
         logger.debug("Creating SettingsPanel widget...")
         self.settings_panel = SettingsPanel()
-        self.settings_panel.token_changed.connect(self._on_token_change)
-        self.settings_panel.strategy_params_changed.connect(self._on_strategy_params_change)
         
-        # Добавляем вкладки
-        self.tab_widget.addTab(chart_tab, "График")
-        self.tab_widget.addTab(self.settings_panel, "Настройки")
+        # Создаем вкладки
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.chart, "График")
+        self.tabs.addTab(self.settings_panel, "Настройки")
         
-        main_layout.addWidget(self.tab_widget)
-
-        self._current_stream_task: asyncio.Task | None = None
-        # Start initial stream once the event loop is running
-        QTimer.singleShot(0, lambda: self.change_stream(CandleInterval.CANDLE_INTERVAL_1_MIN))
+        # Добавляем виджеты в основной лейаут
+        main_layout.addWidget(self.controls)
+        main_layout.addWidget(self.tabs, 1)  # 1 = stretch factor
+        
+        # Подключаем сигналы
+        self.controls.timeframe_changed.connect(self._on_timeframe_change)
+        self.controls.instrument_changed.connect(self._on_instrument_change)
+        self.controls.start_button.clicked.connect(self._on_start_button_click)
+        self.controls.stop_button.clicked.connect(self._on_stop_button_click)
+        self.controls.strategy_combo.currentTextChanged.connect(self._on_strategy_change)
+        self.settings_panel.token_saved.connect(self._on_token_saved)
+        self.settings_panel.strategy_params_saved.connect(self._on_strategy_params_saved)
+        
+        # Инициализируем состояние кнопок
+        self.controls.start_button.setEnabled(True)
+        self.controls.stop_button.setEnabled(False)
+        
         logger.debug("ModernWindow initialization complete.")
+
+    def _on_timeframe_change(self, interval: CandleInterval):
+        """Обрабатывает изменение таймфрейма."""
+        self.change_stream(interval)
+
+    def _on_instrument_change(self, figi: str):
+        """Обрабатывает изменение выбранного инструмента."""
+        logger.info("Changing instrument to %s", figi)
+        
+        # Останавливаем стратегию, если она запущена
+        if self._strategy_running:
+            asyncio.create_task(self.stop_strategy())
+            
+        # Меняем FIGI
+        self.figi = figi
+        self.chart.set_figi(figi)
+        
+        # Загружаем информацию о новом инструменте
+        asyncio.create_task(self._load_instrument_info())
+        
+        # Перезапускаем стрим свечей
+        current_interval = self.controls.timeframes[self.controls.timeframe_combo.currentText()]
+        self.change_stream(current_interval)
+
+    def _on_start_button_click(self):
+        """Обрабатывает нажатие кнопки запуска стратегии."""
+        asyncio.create_task(self.start_strategy())
+
+    def _on_stop_button_click(self):
+        """Обрабатывает нажатие кнопки остановки стратегии."""
+        asyncio.create_task(self.stop_strategy())
+
+    def _on_strategy_change(self, strategy_name: str):
+        """Обрабатывает изменение выбранной стратегии."""
+        self._strategy_class_name = strategy_name
+        self._strategy_params = {}
+        self.controls.set_strategy_name(strategy_name)
+
+    def _on_token_saved(self, new_token: str):
+        """Обрабатывает сохранение нового токена API."""
+        logger.info("API token has been updated. Reconnecting...")
+        # Перезапускаем текущий стрим, чтобы использовать новый токен
+        current_interval = self.controls.timeframes[self.controls.timeframe_combo.currentText()]
+        self.change_stream(current_interval)
+
+    def _on_strategy_params_saved(self, params: dict):
+        """Обрабатывает сохранение новых параметров стратегии."""
+        strategy_name = params["strategy"]
+        strategy_params = params["params"]
+        
+        logger.info("Strategy parameters updated: %s %s", strategy_name, strategy_params)
+        
+        # Сохраняем параметры для последующего использования
+        self._strategy_class_name = strategy_name
+        self._strategy_params = strategy_params
+        
+        # Обновляем имя стратегии в панели управления
+        self.controls.set_strategy_name(strategy_name)
 
     def change_stream(self, interval: CandleInterval):
         """Cancels the old stream task and starts a new one for the given interval."""
 
         async def _async_change_stream():
             # Cancel and wait for the old task to finish
-            if self._current_stream_task:
+            if self._stream_task:
                 logger.debug("Cancelling previous stream task...")
-                self._current_stream_task.cancel()
+                self._stream_task.cancel()
                 try:
-                    await self._current_stream_task
+                    await self._stream_task
                 except asyncio.CancelledError:
                     logger.debug("Stream task for %s was cancelled.", interval.name)
-                self._current_stream_task = None
+                self._stream_task = None
 
             # Start the new task
             self.chart.clear_data()
             logger.info("Starting new candle stream for interval: %s", interval.name)
-            self._current_stream_task = asyncio.create_task(self._stream_candles(interval))
+            self._stream_task = asyncio.create_task(self._stream_candles(interval))
 
         asyncio.create_task(_async_change_stream())
 
     async def _stream_candles(self, interval: CandleInterval) -> None:
         """Subscribes to candles and updates the chart."""
         logger.debug("Stream task started for interval: %s", interval.name)
-        stream_mgr = None
         try:
             async with InvestClient() as ic:
                 logger.debug("InvestClient entered for interval: %s", interval.name)
-                stream_mgr, candle_iter = await ic.stream_candles(
-                    figi=self.chart.figi, interval=interval
+                self._stream_mgr, self._stream_task = await ic.stream_candles(
+                    figi=self.figi, interval=interval
                 )
-                async for candle in candle_iter:
+                async for candle in self._stream_task:
                     self.chart.update_data(candle)
                     
                     # Если стратегия запущена, отправляем ей свечи
@@ -121,32 +221,11 @@ class ModernWindow(QMainWindow):
         except Exception:
             logger.exception("An error occurred in the candle stream:")
         finally:
-            if stream_mgr:
+            if self._stream_mgr:
                 logger.debug("Stopping stream manager...")
-                stream_mgr.stop()
+                self._stream_mgr.stop()
             logger.debug("Stream task for %s finished.", interval.name)
 
-    def _on_token_change(self, new_token: str):
-        """Обрабатывает изменение токена API."""
-        logger.info("API token has been updated. Reconnecting...")
-        # Перезапускаем текущий стрим, чтобы использовать новый токен
-        current_interval = self.controls.timeframes[self.controls.timeframe_combo.currentText()]
-        self.change_stream(current_interval)
-    
-    def _on_strategy_params_change(self, params: dict):
-        """Обрабатывает изменение параметров стратегии."""
-        strategy_name = params["strategy"]
-        strategy_params = params["params"]
-        
-        logger.info("Strategy parameters updated: %s %s", strategy_name, strategy_params)
-        
-        # Сохраняем параметры для последующего использования
-        self._strategy_class_name = strategy_name
-        self._strategy_params = strategy_params
-        
-        # Обновляем имя стратегии в панели управления
-        self.controls.set_strategy_name(strategy_name)
-    
     def _create_strategy_instance(self) -> Strategy:
         """Создаёт экземпляр выбранной стратегии с указанными параметрами."""
         try:
@@ -249,22 +328,14 @@ class ModernWindow(QMainWindow):
     def closeEvent(self, event):
         """Ensure task is cancelled on window close."""
         logger.debug("Close event received, cancelling stream task.")
-        if self._current_stream_task:
-            self._current_stream_task.cancel()
+        if self._stream_task:
+            self._stream_task.cancel()
             
         # Останавливаем стратегию при закрытии
         if self._strategy_instance:
             asyncio.create_task(self.stop_strategy())
         
         event.accept()
-
-    def _on_strategy_start(self):
-        """Обертка для кнопки запуска стратегии."""
-        asyncio.create_task(self.start_strategy())
-    
-    def _on_strategy_stop(self):
-        """Обертка для кнопки остановки стратегии."""
-        asyncio.create_task(self.stop_strategy())
 
     def _on_strategy_signal(self, signal: dict):
         """Обрабатывает сигналы от стратегии."""
